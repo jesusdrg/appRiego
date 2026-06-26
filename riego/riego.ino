@@ -119,7 +119,7 @@ void sendAllSchedules();
 // BLE Server Callbacks
 // ============================================================
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
+  void onConnect(NimBLEServer* server, NimBLEConnInfo& connInfo) override {
     deviceConnected  = true;
     connectTime      = millis();
     firstStatusSent  = false;
@@ -127,14 +127,14 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     Serial.println("BLE client connected");
   }
 
-  void onDisconnect(NimBLEServer* server, ble_gap_conn_desc* desc, int reason) override {
+  void onDisconnect(NimBLEServer* server, NimBLEConnInfo& connInfo, int reason) override {
     deviceConnected = false;
     mtuReady        = false;
     Serial.println("BLE client disconnected — restarting advertising");
     NimBLEDevice::startAdvertising();
   }
 
-  void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override {
+  void onMTUChange(uint16_t MTU, NimBLEConnInfo& connInfo) override {
     Serial.printf("MTU negotiated: %u\n", MTU);
     mtuReady = true;
     if (!firstStatusSent) {
@@ -148,7 +148,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 // BLE Command Characteristic Callbacks
 // ============================================================
 class CommandCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* characteristic, ble_gap_conn_desc* desc) override {
+  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override {
     String raw = String(characteristic->getValue().c_str());
     dispatchCommand(raw);
   }
