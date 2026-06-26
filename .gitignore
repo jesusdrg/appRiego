@@ -1,0 +1,25 @@
+# Arduino / ESP32
+*.elf
+*.bin
+*.hex
+*.map
+build/
+
+# Expo / Node
+app-riego/node_modules/
+app-riego/.expo/
+app-riego/dist/
+app-riego/.env
+app-riego/android/
+app-riego/ios/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SDD artifacts
+.atl/
+
+# Unrelated files
+*.pdf
+interfaz .html
