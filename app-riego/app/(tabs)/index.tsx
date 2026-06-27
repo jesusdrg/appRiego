@@ -1,371 +1,308 @@
-import { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  TextInput,
-  Modal,
-  ScrollView,
-  Alert,
-} from 'react-native';
+import { useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useBleStore } from '@/src/stores/useBleStore';
 import { useIrrigationStore } from '@/src/stores/useIrrigationStore';
 import { bleService } from '@/src/ble/BleService';
-import { cmd } from '@/src/ble/bleConstants';
+import { computeFireDates } from '@/src/utils/scheduleUtils';
+import { Schedule } from '@/src/ble/bleConstants';
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Format a uptime value (milliseconds) into a human-readable "Xh Ym" string.
- * Returns '—' when the value is absent.
- */
 function formatUptime(ms?: number): string {
-  if (ms === undefined || ms === null) return '—';
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  return `${hours}h ${minutes}m`;
+  if (!ms) return '—';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-function statusColor(status: string): string {
-  switch (status) {
-    case 'connected':
-      return '#22c55e';
-    case 'scanning':
-      return '#f59e0b';
-    case 'disconnected':
-      return '#ef4444';
-    default:
-      return '#94a3b8';
-  }
-}
+function nextEvent(schedules: Schedule[]): { label: string; when: string } | null {
+  const now = new Date();
+  let earliest: Date | null = null;
+  let target: Schedule | null = null;
 
-// ─── Zone Duration Modal ─────────────────────────────────────────────────────
-
-interface ZoneDurationModalProps {
-  visible: boolean;
-  zoneId: 1 | 2;
-  onCancel: () => void;
-  onConfirm: (duration: number) => void;
-}
-
-function ZoneDurationModal({ visible, zoneId, onCancel, onConfirm }: ZoneDurationModalProps) {
-  const [duration, setDuration] = useState('');
-
-  const handleConfirm = () => {
-    const seconds = parseInt(duration, 10);
-    if (isNaN(seconds) || seconds <= 0) {
-      Alert.alert('Invalid duration', 'Enter a positive number of seconds.');
-      return;
+  for (const s of schedules) {
+    if (!s.active) continue;
+    const fires = computeFireDates(s, now, 30);
+    if (fires.length > 0 && (!earliest || fires[0] < earliest)) {
+      earliest = fires[0];
+      target = s;
     }
-    onConfirm(seconds);
-    setDuration('');
-  };
+  }
 
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Zone {zoneId} — Duration</Text>
-          <Text style={styles.modalLabel}>Duration (seconds)</Text>
-          <TextInput
-            style={styles.modalInput}
-            keyboardType="number-pad"
-            value={duration}
-            onChangeText={setDuration}
-            placeholder="e.g. 300"
-            autoFocus
-          />
-          <View style={styles.modalActions}>
-            <TouchableOpacity style={styles.btnSecondary} onPress={onCancel}>
-              <Text style={styles.btnSecondaryText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.btnPrimary} onPress={handleConfirm}>
-              <Text style={styles.btnPrimaryText}>Start</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
+  if (!earliest || !target) return null;
+
+  const diffMs = earliest.getTime() - now.getTime();
+  const diffH = Math.floor(diffMs / 3600000);
+  const diffM = Math.floor((diffMs % 3600000) / 60000);
+
+  let when = '';
+  if (diffH < 1) when = `in ${diffM}m`;
+  else if (diffH < 24) when = `in ${diffH}h ${diffM}m`;
+  else {
+    const days = Math.floor(diffH / 24);
+    when = days === 1 ? 'tomorrow' : `in ${days} days`;
+  }
+
+  const timeStr = `${String(earliest.getHours()).padStart(2, '0')}:${String(earliest.getMinutes()).padStart(2, '0')}`;
+
+  return {
+    label: `Zone ${target.zone_id} · ${target.type} · ${timeStr}`,
+    when,
+  };
 }
 
-// ─── Dashboard ───────────────────────────────────────────────────────────────
+// ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export default function DashboardScreen() {
   const { status: bleStatus } = useBleStore();
-  const { pump, zones, systemStatus } = useIrrigationStore();
-
-  const [durationModal, setDurationModal] = useState<{ visible: boolean; zoneId: 1 | 2 }>({
-    visible: false,
-    zoneId: 1,
-  });
+  const { zones, schedules, systemStatus } = useIrrigationStore();
 
   const isConnected = bleStatus === 'connected';
+  const zone1Active = zones[1].active;
+  const zone2Active = zones[2].active;
+  const anyActive = zone1Active || zone2Active;
 
-  // ─── Pump control ──────────────────────────────────────────────────────────
-  const handlePumpToggle = () => {
-    if (!isConnected) return;
-    bleService.sendCommand(pump ? cmd.pumpOff() : cmd.pumpOn());
-  };
+  const next = useMemo(() => nextEvent(schedules), [schedules]);
 
-  // ─── Zone control ──────────────────────────────────────────────────────────
-  const handleZoneTap = (zoneId: 1 | 2) => {
-    if (!isConnected) return;
-    const zoneActive = zones[zoneId].active;
+  const zone1Count = schedules.filter((s) => s.zone_id === 1).length;
+  const zone2Count = schedules.filter((s) => s.zone_id === 2).length;
 
-    if (zoneActive) {
-      // Zone is on → turn off immediately
-      bleService.sendCommand(cmd.zoneOff(zoneId));
-    } else {
-      // Zone is off → prompt for duration
-      setDurationModal({ visible: true, zoneId });
-    }
-  };
-
-  const handleZoneConfirm = (duration: number) => {
-    bleService.sendCommand(cmd.zoneOn(durationModal.zoneId, duration));
-    setDurationModal((prev) => ({ ...prev, visible: false }));
-  };
-
-  const handleZoneCancel = () => {
-    setDurationModal((prev) => ({ ...prev, visible: false }));
-  };
-
-  // ─── Render ────────────────────────────────────────────────────────────────
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      {/* Connection banner */}
-      <View style={[styles.banner, { backgroundColor: statusColor(bleStatus) }]}>
-        <Text style={styles.bannerText}>
-          {bleStatus === 'idle' && 'Not connected'}
-          {bleStatus === 'scanning' && 'Scanning for RiegoESP32…'}
-          {bleStatus === 'connected' && 'Connected to RiegoESP32'}
-          {bleStatus === 'disconnected' && 'Disconnected'}
-        </Text>
-        {bleStatus === 'disconnected' && (
-          <TouchableOpacity style={styles.reconnectBtn} onPress={() => bleService.connect()}>
-            <Text style={styles.reconnectBtnText}>Reconnect</Text>
-          </TouchableOpacity>
+    <View style={styles.root}>
+      {/* Connection pill */}
+      <View style={styles.pillRow}>
+        <View style={[styles.pill, isConnected ? styles.pillConnected : styles.pillDisconnected]}>
+          <View style={[styles.dot, isConnected ? styles.dotConnected : styles.dotDisconnected]} />
+          <Text style={styles.pillText}>
+            {bleStatus === 'connected' && 'Connected'}
+            {bleStatus === 'scanning' && 'Scanning…'}
+            {bleStatus === 'disconnected' && 'Disconnected'}
+            {bleStatus === 'idle' && 'Not connected'}
+          </Text>
+          {bleStatus === 'disconnected' && (
+            <TouchableOpacity onPress={() => bleService.connect()} style={styles.reconnectInline}>
+              <Text style={styles.reconnectText}>Reconnect</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* Main status card */}
+      <View style={styles.statusCard}>
+        {anyActive ? (
+          <>
+            <Text style={styles.statusIcon}>💧</Text>
+            <Text style={styles.statusTitle}>Irrigating</Text>
+            {zone1Active && <Text style={styles.statusSub}>Zone 1 active</Text>}
+            {zone2Active && <Text style={styles.statusSub}>Zone 2 active</Text>}
+          </>
+        ) : (
+          <>
+            <Text style={styles.statusIcon}>✅</Text>
+            <Text style={styles.statusTitle}>All clear</Text>
+            <Text style={styles.statusSub}>No active irrigation</Text>
+          </>
         )}
       </View>
 
-      {/* Pump card */}
+      {/* Next event */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Pump</Text>
-        <TouchableOpacity
-          style={[styles.controlBtn, pump ? styles.btnActive : styles.btnInactive]}
-          onPress={handlePumpToggle}
-          disabled={!isConnected}
-        >
-          <Text style={styles.controlBtnText}>{pump ? 'ON — Tap to turn off' : 'OFF — Tap to turn on'}</Text>
-        </TouchableOpacity>
+        <Text style={styles.cardLabel}>Next event</Text>
+        {next ? (
+          <>
+            <Text style={styles.nextLabel}>{next.label}</Text>
+            <Text style={styles.nextWhen}>{next.when}</Text>
+          </>
+        ) : (
+          <Text style={styles.nextEmpty}>No upcoming schedules</Text>
+        )}
       </View>
 
-      {/* Zone 1 */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Zone 1</Text>
-        <TouchableOpacity
-          style={[styles.controlBtn, zones[1].active ? styles.btnActive : styles.btnInactive]}
-          onPress={() => handleZoneTap(1)}
-          disabled={!isConnected}
-        >
-          <Text style={styles.controlBtnText}>
-            {zones[1].active ? 'ON — Tap to turn off' : 'OFF — Tap to turn on'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Zone 2 */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Zone 2</Text>
-        <TouchableOpacity
-          style={[styles.controlBtn, zones[2].active ? styles.btnActive : styles.btnInactive]}
-          onPress={() => handleZoneTap(2)}
-          disabled={!isConnected}
-        >
-          <Text style={styles.controlBtnText}>
-            {zones[2].active ? 'ON — Tap to turn off' : 'OFF — Tap to turn on'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* System stats */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>System Status</Text>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Uptime</Text>
-          <Text style={styles.statValue}>{formatUptime(systemStatus?.uptime)}</Text>
+      {/* Zone summary */}
+      <View style={styles.row}>
+        <View style={[styles.zoneCard, zone1Active && styles.zoneCardActive]}>
+          <Text style={styles.zoneTitle}>Zone 1</Text>
+          <Text style={styles.zoneStatus}>{zone1Active ? '● Active' : '○ Idle'}</Text>
+          <Text style={styles.zoneSched}>{zone1Count} schedule{zone1Count !== 1 ? 's' : ''}</Text>
         </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Current time</Text>
-          <Text style={styles.statValue}>{systemStatus?.local_time ?? '—'}</Text>
-        </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Auto mode</Text>
-          <Text style={styles.statValue}>{systemStatus?.auto_mode ? 'On' : 'Off'}</Text>
-        </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Time synced</Text>
-          <Text style={styles.statValue}>{systemStatus?.time_synced ? 'Yes' : 'No'}</Text>
-        </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Schedules</Text>
-          <Text style={styles.statValue}>{systemStatus?.schedule_count ?? '—'}</Text>
-        </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Pump manual</Text>
-          <Text style={styles.statValue}>{systemStatus?.pump_manual ? 'Yes' : 'No'}</Text>
+        <View style={[styles.zoneCard, zone2Active && styles.zoneCardActive]}>
+          <Text style={styles.zoneTitle}>Zone 2</Text>
+          <Text style={styles.zoneStatus}>{zone2Active ? '● Active' : '○ Idle'}</Text>
+          <Text style={styles.zoneSched}>{zone2Count} schedule{zone2Count !== 1 ? 's' : ''}</Text>
         </View>
       </View>
 
-      {/* Zone duration modal */}
-      <ZoneDurationModal
-        visible={durationModal.visible}
-        zoneId={durationModal.zoneId}
-        onCancel={handleZoneCancel}
-        onConfirm={handleZoneConfirm}
-      />
-    </ScrollView>
+      {/* System row */}
+      <View style={styles.sysRow}>
+        <Text style={styles.sysItem}>{systemStatus?.local_time ?? '—'}</Text>
+        <Text style={styles.sysDivider}>·</Text>
+        <Text style={styles.sysItem}>Auto {systemStatus?.auto_mode ? '✓' : '✗'}</Text>
+        <Text style={styles.sysDivider}>·</Text>
+        <Text style={styles.sysItem}>Up {formatUptime(systemStatus?.uptime)}</Text>
+      </View>
+    </View>
   );
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
-    padding: 16,
-    gap: 12,
+  root: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    gap: 14,
   },
-  banner: {
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginBottom: 4,
+  pillRow: {
+    alignItems: 'center',
   },
-  bannerText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  reconnectBtn: {
-    marginTop: 8,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    borderRadius: 6,
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 20,
     paddingVertical: 6,
     paddingHorizontal: 14,
-    alignSelf: 'flex-start',
+    gap: 6,
   },
-  reconnectBtnText: {
-    color: '#fff',
-    fontWeight: '700',
+  pillConnected: {
+    backgroundColor: '#dcfce7',
+  },
+  pillDisconnected: {
+    backgroundColor: '#fee2e2',
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  dotConnected: {
+    backgroundColor: '#22c55e',
+  },
+  dotDisconnected: {
+    backgroundColor: '#ef4444',
+  },
+  pillText: {
     fontSize: 13,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  reconnectInline: {
+    marginLeft: 4,
+  },
+  reconnectText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ef4444',
+    textDecorationLine: 'underline',
+  },
+  statusCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 28,
+    alignItems: 'center',
+    gap: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  statusIcon: {
+    fontSize: 36,
+    marginBottom: 4,
+  },
+  statusTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1e293b',
+  },
+  statusSub: {
+    fontSize: 14,
+    color: '#64748b',
   },
   card: {
     backgroundColor: '#fff',
     borderRadius: 12,
     padding: 16,
+    gap: 4,
     shadowColor: '#000',
-    shadowOpacity: 0.06,
+    shadowOpacity: 0.04,
     shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-    gap: 10,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
-  cardTitle: {
-    fontSize: 16,
+  cardLabel: {
+    fontSize: 11,
     fontWeight: '700',
-    color: '#1e293b',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 2,
   },
-  controlBtn: {
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  btnActive: {
-    backgroundColor: '#1a7fd4',
-  },
-  btnInactive: {
-    backgroundColor: '#e2e8f0',
-  },
-  controlBtnText: {
-    fontWeight: '600',
+  nextLabel: {
     fontSize: 15,
+    fontWeight: '600',
     color: '#1e293b',
   },
-  statRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e2e8f0',
-  },
-  statLabel: {
-    color: '#64748b',
-    fontSize: 14,
-  },
-  statValue: {
-    color: '#1e293b',
-    fontSize: 14,
+  nextWhen: {
+    fontSize: 13,
+    color: '#1a7fd4',
     fontWeight: '500',
   },
-  // Modal
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  modalCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-    width: '100%',
-    gap: 14,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1e293b',
-  },
-  modalLabel: {
+  nextEmpty: {
     fontSize: 14,
-    color: '#64748b',
+    color: '#94a3b8',
   },
-  modalInput: {
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-  },
-  modalActions: {
+  row: {
     flexDirection: 'row',
     gap: 12,
-    justifyContent: 'flex-end',
   },
-  btnPrimary: {
-    backgroundColor: '#1a7fd4',
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
+  zoneCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 14,
+    gap: 4,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
-  btnPrimaryText: {
-    color: '#fff',
-    fontWeight: '600',
+  zoneCardActive: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1.5,
+    borderColor: '#1a7fd4',
   },
-  btnSecondary: {
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-  },
-  btnSecondaryText: {
+  zoneTitle: {
+    fontSize: 13,
+    fontWeight: '700',
     color: '#475569',
+  },
+  zoneStatus: {
+    fontSize: 14,
     fontWeight: '600',
+    color: '#1e293b',
+  },
+  zoneSched: {
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+  sysRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sysItem: {
+    fontSize: 12,
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+  sysDivider: {
+    fontSize: 12,
+    color: '#cbd5e1',
   },
 });

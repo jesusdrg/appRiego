@@ -2,7 +2,7 @@
 export const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
 export const COMMAND_CHAR = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
 export const STATUS_CHAR = 'beb5483f-36e1-4688-b7f5-ea07361b26a8';
-export const DEVICE_NAME = 'RiegoESP32';
+export const DEVICE_NAME = 'Modulo Riego';
 
 export type ScheduleType = 'daily' | 'weekly' | 'interval' | 'monthly' | 'once';
 

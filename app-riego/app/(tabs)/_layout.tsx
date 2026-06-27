@@ -6,36 +6,29 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: true,
         tabBarActiveTintColor: '#1a7fd4',
-        tabBarInactiveTintColor: '#888',
+        tabBarInactiveTintColor: '#94a3b8',
+        tabBarStyle: { borderTopColor: '#e2e8f0' },
       }}
     >
       <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Dashboard',
-          tabBarLabel: 'Dashboard',
-        }}
+        name="tests"
+        options={{ title: 'Tests', tabBarLabel: 'Tests' }}
       />
       <Tabs.Screen
         name="schedules"
-        options={{
-          title: 'Schedules',
-          tabBarLabel: 'Schedules',
-        }}
+        options={{ title: 'Schedules', tabBarLabel: 'Schedules' }}
+      />
+      <Tabs.Screen
+        name="index"
+        options={{ title: 'Dashboard', tabBarLabel: 'Dashboard' }}
       />
       <Tabs.Screen
         name="calendar"
-        options={{
-          title: 'Calendar',
-          tabBarLabel: 'Calendar',
-        }}
+        options={{ title: 'Calendar', tabBarLabel: 'Calendar' }}
       />
       <Tabs.Screen
         name="log"
-        options={{
-          title: 'Log',
-          tabBarLabel: 'Log',
-        }}
+        options={{ title: 'Log', tabBarLabel: 'Log' }}
       />
     </Tabs>
   );

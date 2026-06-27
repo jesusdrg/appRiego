@@ -101,6 +101,7 @@ export default function NewScheduleScreen() {
   const [hour, setHour] = useState('');
   const [minute, setMinute] = useState('');
   const [duration, setDuration] = useState('');
+  const [durationUnit, setDurationUnit] = useState<'sec' | 'min'>('sec');
   const [type, setType] = useState<ScheduleType>('daily');
 
   // Type-specific fields
@@ -128,7 +129,8 @@ export default function NewScheduleScreen() {
     if (isNaN(m) || m < 0 || m > 59) return 'Minute must be 0–59.';
 
     const dur = parseInt(duration, 10);
-    if (isNaN(dur) || dur < 1 || dur > 120) return 'Duration must be 1–120 minutes.';
+    const maxVal = durationUnit === 'min' ? 120 : 7200;
+    if (isNaN(dur) || dur < 1 || dur > maxVal) return `Duration must be 1–${maxVal} ${durationUnit === 'min' ? 'minutes' : 'seconds'}.`;
 
     switch (type) {
       case 'weekly':
@@ -162,7 +164,7 @@ export default function NewScheduleScreen() {
       zone_id: zone!,
       hour: parseInt(hour, 10),
       minute: parseInt(minute, 10),
-      duration: parseInt(duration, 10),
+      duration: durationUnit === 'min' ? parseInt(duration, 10) * 60 : parseInt(duration, 10),
       type,
       date: type === 'interval' || type === 'once' ? date : '',
       days_mask: type === 'weekly' ? daysMask : 0,
@@ -226,12 +228,26 @@ export default function NewScheduleScreen() {
 
       {/* Duration */}
       <View style={styles.section}>
-        <Text style={styles.label}>Duration (minutes, 1–120)</Text>
+        <Text style={styles.label}>Duration</Text>
+        <View style={styles.unitToggle}>
+          <TouchableOpacity
+            style={[styles.unitBtn, durationUnit === 'sec' && styles.unitBtnActive]}
+            onPress={() => setDurationUnit('sec')}
+          >
+            <Text style={[styles.unitBtnText, durationUnit === 'sec' && styles.unitBtnTextActive]}>Seconds</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.unitBtn, durationUnit === 'min' && styles.unitBtnActive]}
+            onPress={() => setDurationUnit('min')}
+          >
+            <Text style={[styles.unitBtnText, durationUnit === 'min' && styles.unitBtnTextActive]}>Minutes</Text>
+          </TouchableOpacity>
+        </View>
         <TextInput
           style={styles.input}
           keyboardType="number-pad"
-          maxLength={3}
-          placeholder="e.g. 15"
+          maxLength={4}
+          placeholder={durationUnit === 'sec' ? 'e.g. 30' : 'e.g. 5'}
           value={duration}
           onChangeText={setDuration}
         />
@@ -474,5 +490,28 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  unitToggle: {
+    flexDirection: 'row',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    overflow: 'hidden',
+  },
+  unitBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  unitBtnActive: {
+    backgroundColor: '#1a7fd4',
+  },
+  unitBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  unitBtnTextActive: {
+    color: '#fff',
   },
 });

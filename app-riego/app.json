@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "app-riego",
-    "slug": "app-riego",
+    "name": "SABES RIEGO",
+    "slug": "sabes-riego",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -27,7 +27,8 @@
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.ACCESS_FINE_LOCATION"
-      ]
+      ],
+      "package": "com.jesusdrg.sabesriego"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -42,6 +43,12 @@
           "bluetoothAlwaysPermission": "Allow $(BUNDLE_IDENTIFIER) to connect to Bluetooth devices"
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3272e602-d781-409d-a58e-4d49544a25b2"
+      }
+    }
   }
 }

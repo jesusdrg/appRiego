@@ -25,8 +25,8 @@
 // Hardware pin constants (inverted relay logic: LOW = ON)
 // ============================================================
 const int pumpPin  = 23;
-const int zonePin1 = 25;
-const int zonePin2 = 26;
+const int zonePin1 = 18;
+const int zonePin2 = 19;
 const int ledPin   = 2;
 
 // ============================================================
@@ -39,7 +39,7 @@ struct Schedule {
   int      zone_id;        // 1 or 2
   int      hour;           // 0–23 local time
   int      minute;         // 0–59 local time
-  int      duration;       // run length in minutes
+  int      duration;       // run length in seconds
   String   type;           // "daily" | "weekly" | "interval" | "monthly" | "once"
   String   date;           // YYYY-MM-DD — start date (interval) / fire date (once)
   uint8_t  days_mask;      // weekly: bit0=Sun … bit6=Sat
@@ -53,13 +53,21 @@ Schedule schedules[MAX_SCHEDULES];
 int scheduleCount = 0;
 
 // ============================================================
+// ============================================================
+// BLE command queue — callback enqueues, loop() dequeues and executes
+// ============================================================
+#define CMD_QUEUE_SIZE 256
+static char     cmdQueueBuf[CMD_QUEUE_SIZE];
+static volatile bool cmdPending = false;
+
+// ============================================================
 // Control-layer runtime state
 // ============================================================
 bool          zone1Active         = false;
 bool          zone2Active         = false;
 int           activeZoneId        = 0;    // 0 = none, 1 | 2
 unsigned long zoneStartTime       = 0;    // millis() when zone opened
-int           currentZoneDuration = 0;    // minutes, for the active run
+int           currentZoneDuration = 0;    // run length in seconds
 bool          pumpManual          = false; // pump forced on with no valve (purge/test)
 
 // ============================================================
@@ -149,8 +157,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 // ============================================================
 class CommandCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override {
-    String raw = String(characteristic->getValue().c_str());
-    dispatchCommand(raw);
+    if (!cmdPending) {
+      strncpy(cmdQueueBuf, characteristic->getValue().c_str(), CMD_QUEUE_SIZE - 1);
+      cmdQueueBuf[CMD_QUEUE_SIZE - 1] = '\0';
+      cmdPending = true;
+    }
   }
 };
 
@@ -175,17 +186,22 @@ bool canStartZone(int zoneId) {
  */
 void zoneControl(int zoneId, bool state) {
   int pin = (zoneId == 1) ? zonePin1 : zonePin2;
+  Serial.printf("zoneControl(%d, %s) pin=%d canStart=%d\n", zoneId, state?"ON":"OFF", pin, canStartZone(zoneId));
 
   if (state) {
     if (!canStartZone(zoneId)) {
       notifyError("zone busy");
       return;
     }
+    Serial.printf("GPIO %d -> LOW (zone ON), pump GPIO %d -> LOW\n", pin, pumpPin);
+    if (digitalRead(pumpPin) == HIGH) {
+      digitalWrite(pumpPin, LOW);                    // pump ON first (only if not already on)
+      delay(500);                                    // wait for pump to pressurize
+    }
     digitalWrite(pin, LOW);                          // valve ON (inverted logic)
     if (zoneId == 1) zone1Active = true;
     else             zone2Active = true;
     activeZoneId  = zoneId;
-    digitalWrite(pumpPin, LOW);                      // pump ON — follows valve (I2)
     zoneStartTime = millis();
     notifyZoneStatus(zoneId, true);
     notifyPumpStatus(true);
@@ -194,10 +210,11 @@ void zoneControl(int zoneId, bool state) {
     if (zoneId == 1) zone1Active = false;
     else             zone2Active = false;
     if (activeZoneId == zoneId) activeZoneId = 0;
-    if (!isAnyZoneActive() && !pumpManual)
-      digitalWrite(pumpPin, HIGH);                   // pump OFF — nothing needs it (I2)
+    if (!isAnyZoneActive() && !pumpManual && zoneId == 2) {
+      digitalWrite(pumpPin, HIGH);                   // pump OFF only after zone 2 closes
+    }
     notifyZoneStatus(zoneId, false);
-    notifyPumpStatus(isAnyZoneActive() || pumpManual);
+    notifyPumpStatus(isAnyZoneActive() || pumpManual || zoneId == 1);
   }
 }
 
@@ -621,11 +638,14 @@ void dispatchCommand(String raw) {
   }
 
   String command = doc["command"].as<String>();
+  Serial.println("CMD parsed: " + command);
 
   // ---- pump_on ----
   if (command == "pump_on") {
+    Serial.printf("GPIO %d -> LOW (pump ON)\n", pumpPin);
     pumpManual = true;
     digitalWrite(pumpPin, LOW);
+    Serial.println("digitalWrite done");
     notifyPumpStatus(true);
     notifyLog("pump manual on");
 
@@ -735,7 +755,7 @@ void dispatchCommand(String raw) {
 // ============================================================
 
 void initBLE() {
-  NimBLEDevice::init("RiegoESP32");
+  NimBLEDevice::init("Modulo Riego");
   NimBLEDevice::setMTU(247);  // request 247-byte MTU globally
 
   pServer = NimBLEDevice::createServer();
@@ -792,7 +812,14 @@ void setup() {
 // ============================================================
 
 void loop() {
-  // (a) Deferred first-status notify after MTU negotiation or 1 s timeout.
+  // (a) Process pending BLE command from queue (enqueued by onWrite callback).
+  if (cmdPending) {
+    String cmd = String(cmdQueueBuf);
+    cmdPending = false;
+    dispatchCommand(cmd);
+  }
+
+  // (c) Deferred first-status notify after MTU negotiation or 1 s timeout.
   //     Prevents truncated payloads on centrals that negotiate MTU slowly.
   if (deviceConnected && !firstStatusSent &&
       (mtuReady || (millis() - connectTime) > 1000UL)) {
@@ -800,9 +827,9 @@ void loop() {
     firstStatusSent = true;
   }
 
-  // (b) Duration tick — check if the active zone has finished its run.
+  // (d) Duration tick — check if the active zone has finished its run.
   if (activeZoneId != 0) {
-    if ((millis() - zoneStartTime) >= (unsigned long)currentZoneDuration * 60000UL) {
+    if ((millis() - zoneStartTime) >= (unsigned long)currentZoneDuration * 1000UL) {
       int z = activeZoneId;
       zoneControl(z, false);
       notifyScheduleComplete(z, currentZoneDuration);
@@ -810,13 +837,13 @@ void loop() {
     }
   }
 
-  // (c) 60 s schedule tick — check all schedules once per minute.
+  // (e) 60 s schedule tick — check all schedules once per minute.
   if ((millis() - lastScheduleCheck) >= 60000UL) {
     lastScheduleCheck = millis();
     checkAllSchedules();
   }
 
-  // (d) Hourly NVS time save — allows next boot to restore time without app.
+  // (f) Hourly NVS time save — allows next boot to restore time without app.
   if (timeSynced && (millis() - lastTimeSave) >= 3600000UL) {
     lastTimeSave = millis();
     saveCurrentTime();

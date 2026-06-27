@@ -1,4 +1,5 @@
-import { BleManager, Device, Subscription } from 'react-native-ble-plx';
+import { BleManager, Device, Subscription, BleError } from 'react-native-ble-plx';
+import { PermissionsAndroid, Platform } from 'react-native';
 import { cmd, Schedule, SystemStatus, SERVICE_UUID, COMMAND_CHAR, STATUS_CHAR, DEVICE_NAME } from './bleConstants';
 import { parseEvent } from './eventParser';
 
@@ -46,18 +47,52 @@ class BleService {
    * Start scanning for RiegoESP32. On discovery, auto-connect.
    * Sets store status: scanning → connected (or disconnected on failure).
    */
+  private async requestAndroidPermissions(): Promise<boolean> {
+    if (Platform.OS !== 'android') return true;
+
+    const permissions: string[] = [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
+
+    if (Platform.Version >= 31) {
+      permissions.push(
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+      );
+    }
+
+    const results = await PermissionsAndroid.requestMultiple(permissions as never[]);
+    return Object.values(results).every((r) => r === 'granted');
+  }
+
   async connect(): Promise<void> {
     if (!this.manager) {
       console.warn('[BleService] Not initialized. Call init() first.');
       return;
     }
 
+    const granted = await this.requestAndroidPermissions();
+    if (!granted) {
+      console.warn('[BleService] Bluetooth permissions denied');
+      useBleStore.getState().setStatus('disconnected');
+      return;
+    }
+
     const { setStatus, setDevice } = useBleStore.getState();
+
+    // Wait for BLE to be powered on before scanning
+    await new Promise<void>((resolve) => {
+      const subscription = this.manager!.onStateChange((state) => {
+        if (state === 'PoweredOn') {
+          subscription.remove();
+          resolve();
+        }
+      }, true);
+    });
+
     setStatus('scanning');
 
     this.manager.startDeviceScan(
       [SERVICE_UUID],
-      { allowDuplicates: false },
+      null,
       async (error, device) => {
         if (error) {
           console.error('[BleService] Scan error:', error.message);
@@ -65,7 +100,7 @@ class BleService {
           return;
         }
 
-        if (!device || device.name !== DEVICE_NAME) return;
+        if (!device) return;
 
         // Found our device — stop scan and connect
         this.manager?.stopDeviceScan();
@@ -116,7 +151,9 @@ class BleService {
       STATUS_CHAR,
       (error, characteristic) => {
         if (error) {
-          console.error('[BleService] Notify error:', error.message);
+          if (!error.message.toLowerCase().includes('cancel')) {
+            console.warn('[BleService] Notify error:', error.message);
+          }
           return;
         }
         if (characteristic?.value) {
